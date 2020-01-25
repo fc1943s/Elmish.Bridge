@@ -1,5 +1,6 @@
 namespace Elmish.Bridge
 
+open System
 open Elmish
 open Newtonsoft.Json
 open Fable.Remoting.Json
@@ -23,6 +24,35 @@ module internal Helpers =
                             let t = tuple |> Array.map (fun t -> t.PropertyType) |> FSharpType.MakeTupleType
                             Seq.singleton (t.FullName.Replace('+','.'), t, fun j -> FSharpValue.MakeUnion(x, j |> FSharpValue.GetTupleFields)))
         }
+
+    let tryFindType (name:string) mappings =
+        match mappings |> Map.tryFind name with
+        | Some x -> Some x
+        | None ->
+            let objTypes =
+                name.Split([| '['; ']'; ',' |], StringSplitOptions.RemoveEmptyEntries)
+                |> Array.filter (fun x -> not (x.StartsWith " "))
+
+            let result =
+                mappings
+                |> Map.tryPick (fun (k:string) v ->
+                    let indexes = objTypes
+                                  |> Array.map (fun x -> k.IndexOf x)
+                                  |> Array.filter (fun x -> x >= 0)
+                    if indexes.Length = objTypes.Length && (indexes |> Array.sort |> Array.compareWith Operators.compare indexes) = 0
+                    then Some (k, v)
+                    else None)
+
+            match result with
+            | Some (k, v) ->
+//                printfn "Type search. Name: %s. Result: %s" name k
+                Some v
+            | None ->
+                printfn "Type search. Name: %s. Result: None. Mappings: \n%s" name (mappings
+                                                                                    |> Map.toSeq
+                                                                                    |> Seq.map(fun (k, _) -> k)
+                                                                                    |> (fun y -> String.Join ("\n", y)))
+                None
 
 type internal ServerHubData<'model, 'server, 'client> =
     { Model : 'model
@@ -158,7 +188,7 @@ type ServerHub<'model, 'server, 'client>() =
     /// Send client message for all connected users
     default __.BroadcastClient(msg : 'inner) =
         clientMappings
-        |> Map.tryFind typeof<'inner>.FullName
+        |> Helpers.tryFindType typeof<'inner>.FullName
         |> Option.iter (fun f ->
                f msg
                |> ClientBroadcast
@@ -167,7 +197,7 @@ type ServerHub<'model, 'server, 'client>() =
     /// Send server message for all connected users
     default __.BroadcastServer(msg : 'inner) =
         serverMappings
-        |> Map.tryFind typeof<'inner>.FullName
+        |> Helpers.tryFindType typeof<'inner>.FullName
         |> Option.iter (fun f ->
                f msg
                |> ServerBroadcast
@@ -176,7 +206,7 @@ type ServerHub<'model, 'server, 'client>() =
     /// Send client message for all connected users if their `model` passes the predicate
     default __.SendClientIf predicate (msg : 'inner) =
         clientMappings
-        |> Map.tryFind typeof<'inner>.FullName
+        |> Helpers.tryFindType typeof<'inner>.FullName
         |> Option.iter (fun f ->
                (predicate, f msg)
                |> ClientSendIf
@@ -185,7 +215,7 @@ type ServerHub<'model, 'server, 'client>() =
     /// Send server message for all connected users if their `model` passes the predicate
     default __.SendServerIf predicate (msg : 'inner) =
         serverMappings
-        |> Map.tryFind typeof<'inner>.FullName
+        |> Helpers.tryFindType typeof<'inner>.FullName
         |> Option.iter (fun f ->
                (predicate, f msg)
                |> ServerSendIf
@@ -269,7 +299,7 @@ type BridgeServer<'arg, 'model, 'server, 'client, 'impl>(endpoint : string, init
             Newtonsoft.Json.JsonConvert.DeserializeObject
                 (str, typeof<string * string>, c) :?> _
         mappings
-        |> Map.tryFind name
+        |> Helpers.tryFindType name
         |> Option.iter (function
             | Text e -> e o
             | Binary e -> e (System.Convert.FromBase64String o)
